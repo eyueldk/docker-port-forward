@@ -1,0 +1,45 @@
+{
+  "name": "docker-port-forward",
+  "version": "0.1.0",
+  "description": "Publish a temporary local TCP port to a running Docker container using a socat sidecar.",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "bin": {
+    "docker-port-forward": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build",
+    "start": "node dist/cli.js"
+  },
+  "keywords": [
+    "docker",
+    "port-forward",
+    "socat",
+    "cli",
+    "tcp"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.2.0",
+    "cmd-ts": "^0.13.0",
+    "dockerode": "^4.0.2",
+    "exit-hook": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/dockerode": "^4.0.1",
+    "@types/node": "^22.10.0",
+    "tsdown": "^0.21.8",
+    "typescript": "^5.7.0"
+  }
+}
