@@ -4,7 +4,7 @@
 - Prefer simpler, clearer implementations that combine tightly related steps into well-named functions.
 
 ## Learned Workspace Facts
-- This workspace is a TypeScript ESM CLI project; the npm package is `@scriptmachine/docker-port-forward` and the `bin` name is `docker-port-forward`.
+- This workspace is a TypeScript ESM CLI project; the npm package is `@eyueldk/docker-port-forward` and the `bin` name is `docker-port-forward`.
 - The CLI uses `cmd-ts` and `dockerode`.
 - Port forwarding is implemented with a temporary `socat` sidecar container on a Docker network.
 - The build uses `tsdown` and outputs `dist/cli.js`.

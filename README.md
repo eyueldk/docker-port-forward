@@ -7,7 +7,7 @@ Small CLI that exposes a **temporary TCP port on the host** to a **running Docke
 ## Install
 
 ```bash
-npm install -g docker-port-forward
+npm install -g @eyueldk/docker-port-forward
 ```
 
 ## Usage
