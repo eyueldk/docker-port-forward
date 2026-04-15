@@ -1,6 +1,6 @@
 {
-  "name": "@eyueldk/docker-port-forward",
-  "version": "0.1.1",
+  "name": "@scriptmachine/docker-port-forward",
+  "version": "0.1.2",
   "description": "Publish a temporary local TCP port to a running Docker container using a socat sidecar.",
   "license": "MIT",
   "type": "module",
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build",
+    "prepublishOnly": "bun run typecheck && bun run build",
     "start": "node dist/cli.js"
   },
   "keywords": [
