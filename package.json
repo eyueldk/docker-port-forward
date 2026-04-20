@@ -1,28 +1,38 @@
 {
   "name": "@eyueldk/docker-port-forward",
-  "version": "0.1.2",
-  "description": "Publish a temporary local TCP port to a running Docker container using a socat sidecar.",
+  "version": "1.0.0",
+  "description": "Publish temporary local TCP port(s) to running Docker container(s) using socat sidecar(s).",
   "license": "MIT",
+  "author": "eyueldk",
+  "homepage": "https://github.com/eyueldk/docker-port-forward#readme",
+  "bugs": {
+    "url": "https://github.com/eyueldk/docker-port-forward/issues"
+  },
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "bin": {
     "docker-port-forward": "./dist/cli.js"
   },
   "scripts": {
+    "dev": "tsx src/cli.ts",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "bun run typecheck && bun run build",
+    "prepublishOnly": "pnpm run typecheck && pnpm run build",
     "start": "node dist/cli.js"
   },
   "keywords": [
     "docker",
+    "dockerode",
     "port-forward",
     "socat",
     "cli",
-    "tcp"
+    "tcp",
+    "compose"
   ],
   "engines": {
     "node": ">=20"
@@ -37,13 +47,15 @@
   "dependencies": {
     "@clack/prompts": "^1.2.0",
     "cmd-ts": "^0.13.0",
-    "dockerode": "^4.0.2",
-    "exit-hook": "^5.1.0"
+    "dockerode": "^4.0.10",
+    "exit-hook": "^5.1.0",
+    "open": "^11.0.0"
   },
   "devDependencies": {
     "@types/dockerode": "^4.0.1",
     "@types/node": "^22.10.0",
     "tsdown": "^0.21.8",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
 }

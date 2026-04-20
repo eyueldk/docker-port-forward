@@ -62,7 +62,7 @@ export interface StartSocatSidecarParams {
 
 export interface StartedSocatSidecar {
   container: Dockerode.Container;
-  /** Host port clients connect to (from `--host-port` or Docker after `HostPort: "0"`). */
+  /** Host port clients connect to (from `-t` third segment or Docker after `HostPort: "0"`). */
   publishedHostPort: number;
 }
 

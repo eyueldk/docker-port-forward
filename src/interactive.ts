@@ -1,32 +1,41 @@
-import { cancel, isCancel, select, text } from "@clack/prompts";
+import { cancel, groupMultiselect, isCancel } from "@clack/prompts";
 import type Docker from "dockerode";
 import type Dockerode from "dockerode";
+import { dedupeTargets, type ResolvedForwardTarget } from "./targets";
 
-export interface InteractiveSelection {
-  container: string;
-  containerPort: number;
-}
+export type { ResolvedForwardTarget };
 
 function containerName(container: Dockerode.ContainerInfo): string {
   return container.Names[0]?.replace(/^\//, "") ?? container.Id.slice(0, 12);
 }
 
-function defaultContainerPort(container: Dockerode.ContainerInfo): number | undefined {
-  return container.Ports.find((port) => port.PrivatePort > 0)?.PrivatePort;
-}
-
 function exposedContainerPorts(container: Dockerode.ContainerInfo): number[] {
   const ports = new Set<number>();
+  // WARNING: Ports is not typed correctly. Maybe null.
+  if (!Array.isArray(container.Ports)) {
+    return [];
+  }
   for (const port of container.Ports) {
     if (port.PrivatePort > 0) ports.add(port.PrivatePort);
   }
   return [...ports].sort((a, b) => a - b);
 }
 
-export async function promptContainerAndPort(
+function selectionToTarget(value: string): ResolvedForwardTarget {
+  const m = /^(.+):(\d+)$/.exec(value.trim());
+  if (!m) {
+    throw new Error(`Invalid internal selection value "${value}".`);
+  }
+  return {
+    containerRef: m[1],
+    containerPort: Number.parseInt(m[2], 10),
+    hostPort: undefined,
+  };
+}
+
+export async function promptForwardTargets(
   docker: InstanceType<typeof Docker>,
-  fallbackPort: number,
-): Promise<InteractiveSelection> {
+): Promise<ResolvedForwardTarget[]> {
   const runningContainers = await docker.listContainers({ all: false });
   if (runningContainers.length === 0) {
     throw new Error("No running containers were found.");
@@ -40,81 +49,53 @@ export async function promptContainerAndPort(
     else grouped.set(project, [container]);
   }
 
-  const choices: Array<{
-    value: string;
-    label: string;
-    hint?: string;
-    disabled?: boolean;
-  }> = [];
+  const options: Record<string, { value: string; label: string; hint?: string }[]> = {};
 
   for (const [project, containers] of [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    choices.push({
-      value: `__group__${project}`,
-      label: project,
-      disabled: true,
-    });
+    const projectOptions: { value: string; label: string; hint?: string }[] = [];
     for (const container of containers.sort((a, b) => containerName(a).localeCompare(containerName(b)))) {
+      const exposed = exposedContainerPorts(container);
       const service = container.Labels["com.docker.compose.service"];
       const name = containerName(container);
-      const label = service ? `  ${service} (${name})` : `  ${name}`;
-      choices.push({ label, hint: container.Image, value: container.Id });
+      for (const port of exposed) {
+        const value = `${container.Id}:${port}`;
+        const label = service ? `${service} (${name})` : name;
+        projectOptions.push({
+          value,
+          label: `  ${label} : ${port}`,
+          hint: container.Image,
+        });
+      }
+    }
+    if (projectOptions.length > 0) {
+      options[project] = projectOptions;
     }
   }
 
-  const container = await select<string>({
-    message: "Select a container",
-    options: choices,
+  if (Object.keys(options).length === 0) {
+    throw new Error(
+      "No exposed TCP ports were found on running containers; use non-interactive mode with -t instead.",
+    );
+  }
+
+  const picked = await groupMultiselect<string>({
+    message: "Select container:port targets (space to toggle)",
+    options,
+    required: true,
   });
-  if (isCancel(container)) {
+  if (isCancel(picked)) {
     cancel("Operation cancelled.");
     process.exit(0);
   }
 
-  const selected = runningContainers.find((entry) => entry.Id === container);
-  const suggestedPort = selected ? defaultContainerPort(selected) : undefined;
-  const exposed = selected ? exposedContainerPorts(selected) : [];
+  const byId = new Map(runningContainers.map((c) => [c.Id, c]));
 
-  const manualPortValue = "__manual__";
-  const portChoice = await select<string>({
-    message: "Select container TCP port",
-    options: [
-      ...exposed.map((port) => ({
-        value: String(port),
-        label: String(port),
-        hint: "Exposed port",
-      })),
-      {
-        value: manualPortValue,
-        label: "Enter manually",
-        hint: `Default ${suggestedPort ?? fallbackPort}`,
-      },
-    ],
-  });
-  if (isCancel(portChoice)) {
-    cancel("Operation cancelled.");
-    process.exit(0);
-  }
-
-  let containerPort: number;
-  if (portChoice === manualPortValue) {
-    const typedPort = await text({
-      message: "Container TCP port",
-      placeholder: String(suggestedPort ?? fallbackPort),
-      defaultValue: String(suggestedPort ?? fallbackPort),
-      validate: (value) => {
-        const n = Number.parseInt(value ?? "", 10);
-        if (Number.isInteger(n) && n > 0) return;
-        return "Enter a valid TCP port number.";
-      },
-    });
-    if (isCancel(typedPort)) {
-      cancel("Operation cancelled.");
-      process.exit(0);
-    }
-    containerPort = Number.parseInt(typedPort, 10);
-  } else {
-    containerPort = Number.parseInt(portChoice, 10);
-  }
-
-  return { container, containerPort };
+  return dedupeTargets(
+    picked.map((value) => {
+      const t = selectionToTarget(value);
+      const info = byId.get(t.containerRef);
+      const containerLabel = info ? containerName(info) : undefined;
+      return containerLabel ? { ...t, containerLabel } : t;
+    }),
+  );
 }

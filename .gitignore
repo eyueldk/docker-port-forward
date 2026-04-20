@@ -1,5 +1,8 @@
-# dependencies (bun install)
+# dependencies
 node_modules
+
+# other package managers (this repo uses pnpm)
+bun.lock
 
 # output
 out

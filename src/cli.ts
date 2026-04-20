@@ -1,65 +1,55 @@
 #!/usr/bin/env node
 
-import { command, flag, number, option, optional, run, string } from "cmd-ts";
+import { array, command, flag, multioption, option, run, string } from "cmd-ts";
 import { asyncExitHook, gracefulExit } from "exit-hook";
 import Docker from "dockerode";
 import manifest from "../package.json" with { type: "json" };
-import { promptContainerAndPort } from "./interactive";
+import { promptForwardTargets } from "./interactive";
 import { resolveForwardTarget } from "./network";
 import { ensureSocatImage, startSocatSidecar, stopSidecar } from "./socat";
-
-interface EffectiveArgs {
-  container: string;
-  containerPort: number;
-  hostPort: number | undefined;
-  bind: string;
-  network: string | undefined;
-}
-
-function conciseContainerRef(ref: string): string {
-  return /^[a-f0-9]{25,}$/i.test(ref) ? ref.slice(0, 12) : ref;
-}
+import {
+  forwardHttpUrls,
+  openForwardedUrlsSafe,
+  runBrowserPickLoop,
+  type BrowserPickEntry,
+} from "./open-browser";
+import {
+  displayContainerRef,
+  resolveTargetsFromCliArgs,
+  type ResolvedForwardTarget,
+} from "./targets";
 
 const app = command({
   name: "docker-port-forward",
   version: manifest.version,
   description:
-    "Temporarily publish a host port to a running container using a socat sidecar container",
+    "Temporarily publish host port(s) to running container(s) using socat sidecar container(s)",
   args: {
-    container: option({
-      long: "container",
-      short: "c",
-      type: optional(string),
-      description: "Target container name or ID",
-    }),
-    containerPort: option({
-      long: "container-port",
-      short: "p",
-      type: optional(number),
-      description: "TCP port inside the target container",
+    target: multioption({
+      long: "target",
+      short: "t",
+      type: array(string),
+      description:
+        "Target: container, container:port, or container:port:hostPort (repeatable). Omitted host port means Docker assigns an ephemeral port unless the third segment sets it.",
+      defaultValue: () => [],
     }),
     interactive: flag({
       long: "interactive",
       short: "i",
-      description: "Prompt to select container and container port",
+      description: "Prompt to select container:port targets",
     }),
-    hostPort: option({
-      long: "host-port",
-      type: optional(number),
+    openBrowser: flag({
+      long: "open",
       description:
-        "Host port to publish (if omitted, Docker assigns an ephemeral host port)",
+        "Open the default browser to each forwarded URL (http://…) after startup",
     }),
-    bind: option({
-      long: "bind",
+    host: option({
+      long: "host",
+      short: "H",
       type: string,
-      description: "Host IP for the published port (use 0.0.0.0 for all interfaces)",
-      defaultValue: () => "127.0.0.1",
-    }),
-    network: option({
-      long: "network",
-      type: optional(string),
       description:
-        "Docker network to use (defaults to the first attachment with an IPv4; use when you need a specific network)",
+        "Host IP for published port (default loopback; use 0.0.0.0 for all interfaces)",
+      defaultValue: () => "127.0.0.1",
     }),
   },
   handler: async (args) => {
@@ -72,58 +62,71 @@ const app = command({
       throw new Error(`Docker is not ready or socat image could not be prepared: ${msg}`);
     }
 
-    const interactiveSelection = args.interactive
-      ? await promptContainerAndPort(docker, args.containerPort ?? 80)
-      : undefined;
-
-    const effectiveArgs: EffectiveArgs = {
-      container: interactiveSelection?.container ?? args.container ?? "",
-      containerPort: interactiveSelection?.containerPort ?? args.containerPort ?? Number.NaN,
-      hostPort: args.hostPort,
-      bind: args.bind,
-      network: args.network,
-    };
-
-    if (!effectiveArgs.container) {
-      throw new Error("Missing --container (or use --interactive).");
-    }
-    if (!Number.isInteger(effectiveArgs.containerPort) || effectiveArgs.containerPort <= 0) {
-      throw new Error("Missing or invalid --container-port (or use --interactive).");
+    let resolved: ResolvedForwardTarget[];
+    if (args.interactive) {
+      resolved = await promptForwardTargets(docker);
+    } else {
+      resolved = await resolveTargetsFromCliArgs(docker, args.target);
     }
 
-    const forward = await resolveForwardTarget(
-      docker,
-      effectiveArgs.container,
-      effectiveArgs.network,
-    );
-
-    let startedSidecar: Awaited<ReturnType<typeof startSocatSidecar>>;
+    const started: Awaited<ReturnType<typeof startSocatSidecar>>[] = [];
     try {
-      startedSidecar = await startSocatSidecar({
-        docker,
-        networkName: forward.networkName,
-        targetIp: forward.containerIp,
-        targetPort: effectiveArgs.containerPort,
-        hostPort: effectiveArgs.hostPort,
-        hostBind: effectiveArgs.bind,
-      });
+      for (const t of resolved) {
+        const forward = await resolveForwardTarget(docker, t.containerRef);
+        started.push(
+          await startSocatSidecar({
+            docker,
+            networkName: forward.networkName,
+            targetIp: forward.containerIp,
+            targetPort: t.containerPort,
+            hostPort: t.hostPort,
+            hostBind: args.host,
+          }),
+        );
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
+      await Promise.all(started.map((s) => stopSidecar(s.container)));
       throw new Error(`Failed to start socat sidecar: ${msg}`);
     }
 
-    const { container: sidecar, publishedHostPort } = startedSidecar;
-    const shortId = sidecar.id.slice(0, 12);
-    const targetRef = conciseContainerRef(effectiveArgs.container);
-    console.log(
-      `Forwarding ${effectiveArgs.bind}:${publishedHostPort} -> ${targetRef}:${effectiveArgs.containerPort} [socat ${shortId}]`,
-    );
-    console.log("Press Ctrl+C to stop.");
+    for (let i = 0; i < started.length; i++) {
+      const { container: sidecar, publishedHostPort } = started[i];
+      const t = resolved[i];
+      const shortId = sidecar.id.slice(0, 12);
+      const targetRef = displayContainerRef(t);
+      console.log(
+        `Forwarding ${args.host}:${publishedHostPort} -> ${targetRef}:${t.containerPort} [socat ${shortId}]`,
+      );
+    }
 
+    const publishedPorts = started.map((s) => s.publishedHostPort);
+
+    if (args.openBrowser) {
+      await openForwardedUrlsSafe(args.host, publishedPorts);
+    }
+
+    const urls = forwardHttpUrls(args.host, publishedPorts);
+    const browserEntries: BrowserPickEntry[] = urls.map((url, i) => ({
+      url,
+      label: `${displayContainerRef(resolved[i])}:${resolved[i].containerPort}  ${url}`,
+    }));
+
+    console.log("Press Ctrl+C to stop.");
+    if (args.interactive && process.stdin.isTTY) {
+      console.log(
+        "Use the menu below to open forwards; Esc or Exit stops sidecars and quits (same as Ctrl+C).",
+      );
+    }
+
+    const sidecars = started.map((s) => s.container);
+    const pickAbort = new AbortController();
+    const waitPromise = Promise.all(sidecars.map((c) => c.wait()));
+    waitPromise.finally(() => pickAbort.abort());
     const unsubscribeExitHook = asyncExitHook(
       async () => {
-        await stopSidecar(sidecar);
-        console.log("Sidecar stopped.");
+        await Promise.all(sidecars.map((c) => stopSidecar(c)));
+        console.log("Sidecars stopped.");
       },
       { wait: 15_000 },
     );
@@ -135,11 +138,16 @@ const app = command({
     }
 
     try {
-      await sidecar.wait();
-      console.log("Sidecar exited.");
+      await Promise.all([
+        waitPromise,
+        args.interactive && process.stdin.isTTY
+          ? runBrowserPickLoop({ entries: browserEntries, signal: pickAbort.signal })
+          : Promise.resolve(),
+      ]);
+      console.log("Sidecars exited.");
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`Warning: failed while waiting on sidecar: ${message}`);
+      console.error(`Warning: failed while waiting on sidecar(s): ${message}`);
     } finally {
       unsubscribeExitHook();
       if (onSigbreak) {
